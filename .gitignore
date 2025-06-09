@@ -1,0 +1,7 @@
+# .gitignore
+emotion-env/
+
+local_facial_emotion_model/model.safetensors
+
+local_facial_emotion_model/pytorch_model.bin
+

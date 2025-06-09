@@ -1,0 +1,7 @@
+streamlit
+opencv-python
+Pillow
+torch
+transformers
+torchaudio
+torchvision
