@@ -5,8 +5,7 @@ from PIL import Image
 import numpy as np
 import cv2
 import os
-import gdown
-import zipfile
+
 # os.environ["STREAMLIT_WATCHER_TYPE"] = "none"
 
 MODEL_LOCAL_PATH = "./local_facial_emotion_model"
@@ -19,20 +18,9 @@ def load_face_cascade():
 
 @st.cache_resource
 def load_emotion_model():
-    zip_url = "https://drive.google.com/file/d/1HFC2cEKm6Ol6O75_LHj8eGCOOqQWqz1E" 
-    zip_path = "local_facial_emotion_model.zip"
-    extract_dir = "local_facial_emotion_model"
-
-    if not os.path.exists(extract_dir):
-        st.info("⬇️ Downloading model zip from Google Drive...")
-        gdown.download(zip_url, zip_path, quiet=False)
-        with zipfile.ZipFile(zip_path, 'r') as zip_ref:
-            zip_ref.extractall(extract_dir)
-        st.success("✅ Model extracted!")
-
-    # Load processor and model
-    processor = AutoImageProcessor.from_pretrained(extract_dir)
-    model = AutoModelForImageClassification.from_pretrained(extract_dir)
+    repo_id = "dima806/facial_emotions_image_detection"  # Load processor and model from the extracted directory
+    processor = AutoImageProcessor.from_pretrained(repo_id)
+    model = AutoModelForImageClassification.from_pretrained(repo_id)
     return processor, model
 
 def detect_and_predict_emotions(image, face_cascade, processor, model):
