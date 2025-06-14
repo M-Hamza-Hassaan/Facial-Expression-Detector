@@ -1,12 +1,13 @@
-import cv2
-import numpy as np
+import torch
+from transformers import AutoImageProcessor, AutoModelForImageClassification, pipeline
 import streamlit as st
 from PIL import Image
-from transformers import AutoImageProcessor, AutoModelForImageClassification, pipeline
+import numpy as np
+import cv2
 import os
-os.environ["STREAMLIT_WATCHER_TYPE"] = "none"
-
-
+import gdown
+import zipfile
+# os.environ["STREAMLIT_WATCHER_TYPE"] = "none"
 
 MODEL_LOCAL_PATH = "./local_facial_emotion_model"
 @st.cache_resource
@@ -15,35 +16,36 @@ def load_face_cascade():
     face_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + "haarcascade_frontalface_default.xml")
     return face_cascade
 
+
 @st.cache_resource
 def load_emotion_model():
-    """Load the emotion recognition model and processor from local path."""
-    try:
-        # Load emotion classifier pipeline from local model directory
-        emotion_classifier = pipeline(
-            "image-classification",
-            model=MODEL_LOCAL_PATH,   # use local path instead of online model name
-            # return_all_scores=True
-        )
+    zip_url = "https://drive.google.com/file/d/1HFC2cEKm6Ol6O75_LHj8eGCOOqQWqz1E" 
+    zip_path = "local_facial_emotion_model.zip"
+    extract_dir = "local_facial_emotion_model"
 
-        # Load processor and model from the same local path
-        processor = AutoImageProcessor.from_pretrained(MODEL_LOCAL_PATH)
-        model = AutoModelForImageClassification.from_pretrained(MODEL_LOCAL_PATH)
+    if not os.path.exists(extract_dir):
+        st.info("⬇️ Downloading model zip from Google Drive...")
+        gdown.download(zip_url, zip_path, quiet=False)
+        with zipfile.ZipFile(zip_path, 'r') as zip_ref:
+            zip_ref.extractall(extract_dir)
+        st.success("✅ Model extracted!")
 
-        st.success("✅ Successfully loaded emotion model from local directory.")
-        return emotion_classifier, processor, model
+    # Load processor and model
+    processor = AutoImageProcessor.from_pretrained(extract_dir)
+    model = AutoModelForImageClassification.from_pretrained(extract_dir)
+    return processor, model
 
-    except Exception as e:
-        st.error(f"❌ Error loading model locally: {str(e)}")
-        return None, None, None
-
-
-def detect_and_predict_emotions(image, face_cascade, emotion_classifier):
+def detect_and_predict_emotions(image, face_cascade, processor, model):
     """
     Args:
         image: The input image (PIL or NumPy format)
         face_cascade: Haar cascade model for face detection
-        emotion_classifier: Hugging Face pipeline for emotion classification
+        processor: Image processor for the emotion recognition model
+        model: Pre-trained emotion recognition model
+    Detects faces in the image, crops them, and predicts emotions using the model.
+    If no faces are detected, returns an empty result.
+    If an error occurs during prediction, it returns an error message and draws a red box around the face.
+    If successful, it returns the emotion prediction data and the annotated image.
 
     Returns:
         A tuple of results (emotion prediction data) and the annotated image in RGB
@@ -84,17 +86,31 @@ def detect_and_predict_emotions(image, face_cascade, emotion_classifier):
         face_rgb = cv2.cvtColor(face_roi, cv2.COLOR_BGR2RGB)
         face_pil = Image.fromarray(face_rgb)
 
+
         try:
-            predictions = emotion_classifier(face_pil)
-            scores = predictions  # list of dictionaries with scores for each emotion
+            st.image(face_pil, caption="Detected face")
 
-            # Convert to dictionary of emotion: confidence
-            emotion_scores = {pred['label']: pred['score'] for pred in scores}
-            top_pred = max(scores, key=lambda x: x['score'])
+            # Preprocess and predict
+            inputs = processor(images=face_pil, return_tensors="pt")
+            with torch.no_grad():
+                outputs = model(**inputs)
+                probs = torch.nn.functional.softmax(outputs.logits, dim=1)
 
-            predicted_emotion = top_pred['label']
-            confidence = top_pred['score']
+            # Map probabilities to emotion labels
+            emotion_scores = {
+                model.config.id2label[i]: float(score)
+                for i, score in enumerate(probs[0])
+            }
 
+            # Get top prediction
+            top_pred_index = torch.argmax(probs, dim=1).item()
+            predicted_emotion = model.config.id2label[top_pred_index]
+            confidence = probs[0][top_pred_index].item()
+
+            # Show debug info
+            st.write("All predicted scores:", emotion_scores)
+
+            # Save result
             results.append({
                 'emotion': predicted_emotion,
                 'confidence': confidence,
@@ -102,14 +118,10 @@ def detect_and_predict_emotions(image, face_cascade, emotion_classifier):
                 'bbox': (x, y, w, h)
             })
 
-            # Draw a green bounding box around the detected face
+            # Draw box and label
             cv2.rectangle(annotated_image, (x, y), (x + w, y + h), (0, 0, 255), 3)
-
-            # Create and draw label with emotion and confidence
             label = f"{predicted_emotion}: {confidence:.2%}"
             label_size = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.7, 2)[0]
-
-            # Draw filled rectangle as label background
             cv2.rectangle(
                 annotated_image,
                 (x, y - 35),
@@ -117,7 +129,6 @@ def detect_and_predict_emotions(image, face_cascade, emotion_classifier):
                 (0, 255, 0),
                 -1
             )
-            # Draw text on top of the rectangle
             cv2.putText(
                 annotated_image,
                 label,
@@ -128,6 +139,7 @@ def detect_and_predict_emotions(image, face_cascade, emotion_classifier):
                 2
             )
 
+
         except Exception as e:
             st.error(f"⚠️ Emotion prediction error: {e}")
             # Draw red box and "Error" label in case of failure
@@ -137,6 +149,8 @@ def detect_and_predict_emotions(image, face_cascade, emotion_classifier):
     # Convert BGR image back to RGB for display
     annotated_image_rgb = cv2.cvtColor(annotated_image, cv2.COLOR_BGR2RGB)
     return results, annotated_image_rgb
+
+
 
 def display_results(results, annotated_image, original_label="Original Image"):
     """Display the results in the Streamlit UI."""
@@ -173,11 +187,45 @@ def main():
     # Load models
     with st.spinner("🔄 Loading models..."):
         face_cascade = load_face_cascade()
-        emotion_classifier, processor, model = load_emotion_model()
+        processor, model = load_emotion_model()
 
     # Stop if model failed to load
-    if emotion_classifier is None:
-        st.stop()
+    if processor is None or model is None:
+
+        st.error("❌ Failed to load the emotion recognition model. Please check the logs.")
+        return
+    st.success("✅ Models loaded successfully!")
+    st.markdown("---")
+    st.sidebar.subheader("Input Method")
+    st.sidebar.markdown("Choose how to input your image:")
+    st.sidebar.markdown("1. **Upload Image**: Upload a local image file.")
+    st.sidebar.markdown("2. **Take Photo with Camera**: Use your webcam to capture a photo.")
+    st.sidebar.markdown("---")
+    st.sidebar.subheader("Model Information")
+    st.sidebar.markdown("""
+    - **Model**: `facial_emotions_image_detection`
+    - **Source**: Hugging Face
+    - **Face Detection**: OpenCV Haar Cascade
+    - **Emotion Recognition**: Vision Transformer or CNN
+    - **Deployment**: Docker-ready, Hugging Face Spaces compatible
+    """)
+    st.sidebar.markdown("---")
+    st.sidebar.subheader("About This App")
+    st.sidebar.markdown("""
+    This app uses computer vision and deep learning to detect faces and recognize emotions from images.
+    - Detects faces using OpenCV Haar Cascade
+    - Recognizes emotions using a Hugging Face model
+    - Visualizes predictions with confidence and probabilities
+    """)
+    st.sidebar.markdown("---")
+    st.sidebar.subheader("Technical Details")
+    st.sidebar.markdown("""
+    - **Model**: `facial_emotions_image_detection` (via Hugging Face)
+    - **Library**: Streamlit, OpenCV, Transformers
+    - **Face Detection**: Haar Cascade
+    - **Emotion Recognition**: Vision Transformer or CNN
+    - **Deployment**: Docker-ready, Hugging Face Spaces compatible
+    """)
 
     # Input method: Upload or Camera
     input_method = st.radio("Choose input method:", ["Upload Image", "Take Photo with Camera"], horizontal=True)
@@ -190,7 +238,8 @@ def main():
             st.image(image, use_container_width=True)
 
             with st.spinner("Analyzing..."):
-                results, annotated_image = detect_and_predict_emotions(image, face_cascade, emotion_classifier)
+                results, annotated_image = detect_and_predict_emotions(image, face_cascade, processor, model)
+
                 display_results(results, annotated_image)
 
     elif input_method == "Take Photo with Camera":
@@ -201,7 +250,7 @@ def main():
             st.image(image, use_container_width=True)
 
             with st.spinner("Analyzing..."):
-                results, annotated_image = detect_and_predict_emotions(image, face_cascade, emotion_classifier)
+                results, annotated_image = detect_and_predict_emotions(image, face_cascade, processor, model)
                 display_results(results, annotated_image)
 
     # Info section

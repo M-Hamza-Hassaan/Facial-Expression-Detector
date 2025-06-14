@@ -1,7 +1,7 @@
-# .gitignore
+# Ignore Python virtual environment
 emotion-env/
 
-local_facial_emotion_model/model.safetensors
-
-local_facial_emotion_model/pytorch_model.bin
-
+# Ignore model folder and zip (downloaded at runtime from Google Drive)
+downloaded_model/
+local_facial_emotion_model/
+local_facial_emotion_model.zip
